@@ -10,7 +10,9 @@ import android.os.Looper;
 import android.util.Log;
 import android.widget.Toast;
 
-import org.jetbrains.annotations.NotNull;
+import androidx.annotation.NonNull;
+
+import org.jetbrains.annotations.Contract;
 
 import java.io.File;
 import java.io.IOException;
@@ -18,7 +20,6 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.Objects;
 
-import okhttp3.Interceptor;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -43,21 +44,15 @@ public class DownloadService extends Service {
         }
     }
 
-    int progress;
-    private static final String TAG = "DownloadService";
+    public int progress;
+    private final String TAG = getClass().getSimpleName();
     private final IBinder binder = new LocalBinder();
-    OkHttpClient client;
-    ProgressListener progressListener;
-    Context context;
-
-    //    private RequestQueue reqQueue;
-    void showToast(String str) {
-        Toast.makeText(context, str, Toast.LENGTH_SHORT).show();
-    }
+    private OkHttpClient client;
+    private ProgressListener progressListener;
+    private Context context;
 
     @Override
     public void onCreate() {
-//        reqQueue = Volley.newRequestQueue(this);
         context = this;
         progressListener = new ProgressListener() {
             boolean firstUpdate = true;
@@ -71,29 +66,26 @@ public class DownloadService extends Service {
                     if (firstUpdate) {
                         firstUpdate = false;
                         if (contentLength == -1)
-                            progress = 50;
+                            progress = 50; // I don't know content length
                     }
                     if (contentLength != -1) {
                         progress = (int) ((100 * bytesRead) / contentLength);
-                        System.out.format("%d%% done\n", progress);
                     }
                 }
             }
         };
         client = new OkHttpClient.Builder()
-                .addNetworkInterceptor(new Interceptor() {
-                    @NotNull
-                    @Override
-                    public Response intercept(@NotNull Chain chain) throws IOException {
-                        Response originalResponse = chain.proceed(chain.request());
-                        return originalResponse.newBuilder()
-                                .body(new ProgressResponseBody(originalResponse.body(), progressListener))
-                                .build();
-                    }
+                .addNetworkInterceptor(chain -> {
+                    Response originalResponse = chain.proceed(chain.request());
+                    return originalResponse.newBuilder()
+                            .body(new ProgressResponseBody(originalResponse.body(), progressListener))
+                            .build();
                 })
                 .build();
         progress = 0;
     }
+
+    @NonNull
     public static String getFileNameFromURL(String url) {
         if (url == null) {
             return "download.bin";
@@ -104,8 +96,7 @@ public class DownloadService extends Service {
             if (host.length() > 0 && url.endsWith(host)) {
                 return host;
             }
-        }
-        catch(MalformedURLException e) {
+        } catch (MalformedURLException e) {
             return "download.bin";
         }
 
@@ -128,80 +119,43 @@ public class DownloadService extends Service {
         int endIndex = Math.min(lastQMPos, lastHashPos);
         return url.substring(startIndex, endIndex);
     }
+
     @Override
-    public int onStartCommand(Intent intent, int flags, final int startId) {
-        final String url = intent.getStringExtra("DownloadURL");
+    public int onStartCommand(@NonNull Intent intent, int flags, final int startId) {
+
+        final String url = intent.getStringExtra(IntentConstant.INTENT_DOWNLOAD_URL);
         final String path = getFileNameFromURL(url);
-
-
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                Looper.prepare();
-                Request request = new Request.Builder()
-                        .url(url)
-                        .build();
-
-
-                try{
-                    Response response = client.newCall(request).execute();
-                    if (!response.isSuccessful()) {
-                        showToast("Response Error");
-                        progress = -1;
-//                        Looper.myLooper().quit();
-                    }
-                    BufferedSource downloadedData = Objects.requireNonNull(response.body()).source();
-                    File folder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                    File file = new File(folder, path);
-                    if (!folder.exists()) {
-                        boolean folderCreated = folder.mkdir();
-                        Log.d(TAG, "folder created "+ folderCreated);
-                    }
-                    if (file.exists()) {
-                        boolean fileDeleted = file.delete();
-                        Log.v(TAG, "file deleted "+ fileDeleted);
-                    }
-                    Log.d(TAG, String.valueOf(folder));
-                    Log.d(TAG, String.valueOf(file));
-                    boolean fileCreated = file.createNewFile();
-                    Log.d(TAG, "file created" + fileCreated);
-                    BufferedSink sink = Okio.buffer(Okio.sink(file));
-                    sink.writeAll(downloadedData);
-                    sink.close();
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    showToast("Exception Occurred");
+        if (url == null) {
+            progress = -1;
+            return START_REDELIVER_INTENT;
+        }
+        progress = 0;
+        final Request request = new Request.Builder()
+                .url(url)
+                .build();
+        new Thread(() -> {
+            Looper.prepare();
+            try {
+                Response response = client.newCall(request).execute();
+                if (!response.isSuccessful()) {
+                    showToast("Response Error");
                     progress = -1;
-//                    Looper.myLooper().quit();
+//                        Looper.myLooper().quit();
                 }
+                BufferedSource downloadedData = Objects.requireNonNull(response.body()).source();
+                if (saveBufferToFile(path, downloadedData))
+                    progress = 100;
+                else progress = -1;
+            } catch (Exception e) {
+                // Logging error
+                e.printStackTrace();
+                showToast("Exception Occurred");
+                progress = -1;
+//                    Looper.myLooper().quit();
             }
         }).start();
-
-        //        StringRequest downloadRequest= new StringRequest(url, path, new Response.Listener<String>() {
-//            @Override
-//            public void onResponse(String path) {
-//                progress = 100;
-//            }
-//        }, new Response.ErrorListener() {
-//            @Override
-//            public void onErrorResponse(VolleyError error) {
-//                Toast.makeText(context, "Error while downloading: " + error.toString(), Toast.LENGTH_LONG).show();
-//                progress = -1;
-//            }
-//        });
-//        downloadRequest.get
-//        downloadRequest.setOnProgressListener(new Response.ProgressListener() {
-//            @Override
-//            public void onProgress(long downloaded, long totalSize) {
-//                int percentage = (int) ((downloaded / ((float) totalSize)) * 100);
-//                progress = percentage;
-//            }
-//        });
-//        downloadRequest.setTag(TAG);
-//        reqQueue.add(downloadRequest);
-//        reqQueue.start();
         showToast("Service start");
-        return START_STICKY;
+        return START_REDELIVER_INTENT;
     }
 
     @Override
@@ -211,12 +165,11 @@ public class DownloadService extends Service {
 
     @Override
     public void onDestroy() {
-//        reqQueue.cancelAll(TAG);
-//        reqQueue.stop();
         showToast("Service Stopped");
     }
 
-    public int getPercentage() {
+
+    public int getProgress() {
         return progress;
     }
 
@@ -241,7 +194,7 @@ public class DownloadService extends Service {
             return responseBody.contentLength();
         }
 
-        @NotNull
+        @NonNull
         @Override
         public BufferedSource source() {
             if (bufferedSource == null) {
@@ -250,12 +203,14 @@ public class DownloadService extends Service {
             return bufferedSource;
         }
 
+        @NonNull
+        @Contract("_ -> new")
         private Source source(Source source) {
             return new ForwardingSource(source) {
                 long totalBytesRead = 0L;
 
                 @Override
-                public long read(@NotNull Buffer sink, long byteCount) throws IOException {
+                public long read(@NonNull Buffer sink, long byteCount) throws IOException {
                     long bytesRead = super.read(sink, byteCount);
                     // read() returns the number of bytes read, or -1 if this source is exhausted.
                     totalBytesRead += bytesRead != -1 ? bytesRead : 0;
@@ -264,6 +219,35 @@ public class DownloadService extends Service {
                 }
             };
         }
+    }
+
+    public boolean saveBufferToFile(String path, BufferedSource buff) {
+        try {
+            File folder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            File file = new File(folder, path);
+            if (!folder.exists()) {
+                boolean folderCreated = folder.mkdir();
+                Log.d(TAG, "folder created " + folderCreated);
+            }
+            if (file.exists()) {
+                boolean fileDeleted = file.delete();
+                Log.v(TAG, "file deleted " + fileDeleted);
+            }
+            Log.d(TAG, String.valueOf(folder));
+            Log.d(TAG, String.valueOf(file));
+            boolean fileCreated = file.createNewFile();
+            Log.d(TAG, "file created" + fileCreated);
+            BufferedSink sink = Okio.buffer(Okio.sink(file));
+            sink.writeAll(buff);
+            sink.close();
+            return true;
+        } catch (IOException ignored) {
+        }
+        return false;
+    }
+
+    void showToast(String str) {
+        Toast.makeText(context, str, Toast.LENGTH_SHORT).show();
     }
 
     interface ProgressListener {

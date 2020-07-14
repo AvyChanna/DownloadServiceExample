@@ -7,7 +7,6 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
-import android.os.Environment;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -18,16 +17,14 @@ import android.widget.EditText;
 import android.widget.ProgressBar;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
-import org.jetbrains.annotations.NotNull;
-
-import java.io.File;
-
 public class MainActivity extends AppCompatActivity {
-    private static final String TAG = "MainActivity";
+
+    private final String TAG = getClass().getSimpleName();
     DownloadService mService;
     boolean mBound = false;
     // This connection will communicate with our service
@@ -57,34 +54,53 @@ public class MainActivity extends AppCompatActivity {
         mProgressBar = findViewById(R.id.progressBar);
         mButton = findViewById(R.id.button);
         mText = findViewById(R.id.editText);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
         askForPermission();
+        final Intent connectIntent = new Intent(this.getBaseContext(), DownloadService.class);
+        connectIntent.putExtra(IntentConstant.INTENT_CHECK_SERVICE, true);
+        if (startService(connectIntent) != null) {
+            // Service is already running. So, there is a download going on
+            mButton.setEnabled(false);
+            pollForProgress(connectIntent);
+        } else {
+            // Service is free to download next file
+            mButton.setEnabled(true);
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        unbindService(mConnection);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        final Intent downloadIntent = new Intent(this.getBaseContext(), DownloadService.class);
+        bindService(downloadIntent, mConnection, Context.BIND_AUTO_CREATE);
     }
 
     private void askForPermission() {
-        if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-
-
-            if (ActivityCompat.shouldShowRequestPermissionRationale(MainActivity.this, Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
-                ActivityCompat.requestPermissions(MainActivity.this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 101);
-
-            } else {
-                ActivityCompat.requestPermissions(MainActivity.this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 101);
-            }
-        } else if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_DENIED) {
+        String storagePermission = Manifest.permission.WRITE_EXTERNAL_STORAGE;
+        if (ContextCompat.checkSelfPermission(MainActivity.this, storagePermission) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(MainActivity.this, new String[]{storagePermission}, 101);
+        } else if (ContextCompat.checkSelfPermission(MainActivity.this, storagePermission) == PackageManager.PERMISSION_DENIED) {
             Toast.makeText(getApplicationContext(), "Permission was denied", Toast.LENGTH_SHORT).show();
         }
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, @NotNull String[] permissions, @NotNull int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (ActivityCompat.checkSelfPermission(this, permissions[0]) == PackageManager.PERMISSION_GRANTED) {
-
             if (requestCode == 101)
                 Toast.makeText(this, "Permission granted", Toast.LENGTH_SHORT).show();
-        } else {
-            Toast.makeText(this, "Permission denied", Toast.LENGTH_SHORT).show();
-        }
+        } else Toast.makeText(this, "Permission denied", Toast.LENGTH_SHORT).show();
     }
 
     public void startDownload(View view) {
@@ -94,19 +110,23 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         mButton.setEnabled(false);
-        final Intent intent = new Intent(this.getBaseContext(), DownloadService.class);
-        intent.putExtra("DownloadURL", url);
-        Log.d(TAG, Environment.getExternalStorageDirectory() + File.separator + "down.bin");
-        startService(intent);
+        final Intent downloadIntent = new Intent(this.getBaseContext(), DownloadService.class);
+        downloadIntent.putExtra(IntentConstant.INTENT_DOWNLOAD_URL, url);
+        startService(downloadIntent);
+        pollForProgress(downloadIntent);
+
+    }
+
+    public void pollForProgress(final Intent intent) {
         bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
         serviceHandler = new Handler(Looper.getMainLooper());
-        final Runnable r = new Runnable() {
+        Runnable pollService = new Runnable() {
             public void run() {
                 if (!mBound) {
                     serviceHandler.postDelayed(this, delayMillis);
                     return;
                 }
-                int progress = mService.getPercentage();
+                int progress = mService.getProgress();
                 Log.d("progress", String.valueOf(progress));
                 if (progress < 0 || progress >= 100) {
                     // Service is done
@@ -122,8 +142,7 @@ public class MainActivity extends AppCompatActivity {
         };
 
         // This starts our runnable.
-        serviceHandler.postDelayed(r, delayMillis);
-
+        serviceHandler.postDelayed(pollService, delayMillis);
     }
 
     @Override
