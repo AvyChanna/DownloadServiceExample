@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Download Service</string>
+    <string name="test">https://www.google.com</string>
+    <string name="test2">https://speed.hetzner.de/100MB.bin</string>
+</resources>
