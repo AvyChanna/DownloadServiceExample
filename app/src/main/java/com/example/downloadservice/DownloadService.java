@@ -4,9 +4,14 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.Message;
+import android.os.Messenger;
+import android.os.RemoteException;
 import android.util.Log;
 import android.widget.Toast;
 
@@ -50,6 +55,8 @@ public class DownloadService extends Service {
     private OkHttpClient client;
     private ProgressListener progressListener;
     private Context context;
+    // Target we publish for clients to send messages to IncomingHandler.
+    final Messenger mMessenger = new Messenger(new IncomingHandler(Looper.myLooper()));
 
     @Override
     public void onCreate() {
@@ -70,7 +77,18 @@ public class DownloadService extends Service {
                     }
                     if (contentLength != -1) {
                         progress = (int) ((100 * bytesRead) / contentLength);
+
                     }
+
+                }
+                try {
+                    Message msg = Message.obtain(null, AppConst.MSG_RECEIVE_PROGRESS);
+                    Bundle b = new Bundle();
+                    b.putInt(AppConst.DATA_RESPONSE_PROGRESS, progress);
+                    msg.setData(b);
+                    mMessenger.send(msg);
+                } catch (RemoteException e) {
+                    e.printStackTrace();
                 }
             }
         };
@@ -122,8 +140,8 @@ public class DownloadService extends Service {
 
     @Override
     public int onStartCommand(@NonNull Intent intent, int flags, final int startId) {
-
-        final String url = intent.getStringExtra(IntentConstant.INTENT_DOWNLOAD_URL);
+//        return START_STICKY;
+        final String url = intent.getStringExtra(AppConst.INTENT_DOWNLOAD_URL);
         final String path = getFileNameFromURL(url);
         if (url == null) {
             progress = -1;
@@ -155,12 +173,42 @@ public class DownloadService extends Service {
             }
         }).start();
         showToast("Service start");
-        return START_REDELIVER_INTENT;
+        return START_STICKY;
     }
 
     @Override
     public IBinder onBind(Intent intent) {
-        return binder;
+        return mMessenger.getBinder();
+    }
+
+    // Handler of incoming messages from client
+    class IncomingHandler extends Handler {
+        IncomingHandler(Looper looper) {
+            super(looper);
+        }
+
+        @Override
+        public void handleMessage(Message msg) {
+
+            switch (msg.what) {
+                case AppConst.MSG_SEND_PROGRESS:
+                    try {
+                        Message resp = Message.obtain(null, AppConst.MSG_RECEIVE_PROGRESS);
+                        Bundle bResp = new Bundle();
+                        bResp.putInt(AppConst.DATA_RESPONSE_PROGRESS, progress);
+                        resp.setData(bResp);
+                        msg.replyTo.send(resp);
+                    } catch (RemoteException e) {
+                        e.printStackTrace();
+                    }
+                    break;
+//                case AppConst.MSG_DUMMY:
+//                    // add more cases here
+//                    break;
+                default:
+                    super.handleMessage(msg);
+            }
+        }
     }
 
     @Override
@@ -168,10 +216,7 @@ public class DownloadService extends Service {
         showToast("Service Stopped");
     }
 
-
-    public int getProgress() {
-        return progress;
-    }
+    // utils and boilerplate
 
     private static class ProgressResponseBody extends ResponseBody {
 
